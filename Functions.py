@@ -1,0 +1,369 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import os
+import xarray as xr
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import pandas as pd
+import warnings
+from xarray.coding.times import SerializationWarning
+import cftime
+from scipy.optimize import curve_fit
+import matplotlib.path as mpath
+from matplotlib.colors import LogNorm, SymLogNorm
+import regionmask
+
+
+
+'''
+Function to get the correct filepath for a specified data scenario, which is the string of the
+directory where the data for that scenario is stored. Months = 1 gives monthly data, months = 12 
+gives yearly data, if detrend = 'detrended' it gives the detrended arrays. 
+
+'''
+    
+
+def filepath(data_scenario, months, detrend = 'sliced_'):
+    if months == 1:
+        timescale = ''
+    elif months == 12:
+        timescale = 'yearly_' 
+    else:
+        print('Give valid amount of months (1 fro monthly, 12 for yearly data)')
+
+    if detrend == 'raw':      # raw data   (For Data_preprocessing)
+        file_tas = [f for f in os.listdir(data_scenario) if f.startswith('tas_')][0]
+        file_prsn = [f for f in os.listdir(data_scenario) if f.startswith('prsn_')][0]
+        file_pr = [f for f in os.listdir(data_scenario) if f.startswith('pr_')][0]
+        return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, 
+
+    else:
+        file_tas = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}tas')][0]
+        file_prsn = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}prsn')][0]
+        file_pr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}pr.')][0]
+        file_snfr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}snfr')][0]
+            
+    return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, data_scenario + '/' + file_snfr
+    
+
+'''
+Function to create a dictionary of the dataset. Input is directory of the data, months and detrend as in function filepath
+and model only needs specifying for CNRM in order to open the files. 
+'''
+
+warnings.simplefilter("ignore", SerializationWarning) # suppresses the warning that datetime does not work
+
+def create_dictionary_data(directory, months, detrend = 'sliced_', model = ''):
+
+    if model == 'CNRM':
+        base_dirs = {
+            'pi': directory + '/PI',
+            '2K': directory + '/GWL2',
+            '4K': directory + '/GWL4'
+        }
+    else:
+        base_dirs = {
+            'pi': directory + '/pi_control_smhi',
+            '2K': directory + '/gwl2p0_knmi',
+            '4K': directory + '/gwl4p0_dmi'
+        }
+
+    if detrend == 'raw':
+        variables = ['tas', 'prsn', 'pr']
+    else:
+        variables = ['tas', 'prsn', 'pr', 'snfr']
+
+    data = {}
+
+    for experiment, base_dir in base_dirs.items():
+        data[experiment] = {}
+
+        for var, path in zip(variables, filepath(base_dir, months, detrend)):
+            ds = xr.open_dataset(path)
+            data[experiment][var] = ds[var]
+
+    return data
+
+
+
+'''
+Function for calculating the yearly mean from monthly means, can work with time arrays
+of type cftime or datetime64
+'''
+
+def yearly_mean(data_array, snfr_threshold_snow = 0, snfr_threshold_pr = 0):
+
+    if isinstance(data_array, (xr.DataArray, xr.Dataset)):      
+           
+        t0 = data_array.time.values[0]
+        start_year = int(data_array.time.min().dt.year)
+        end_year = int(data_array.time.max().dt.year)
+        years = np.linspace(start_year, end_year, end_year - start_year + 1)
+        times = []
+        means = []
+        for year in years:
+            year_data = data_array.sel(time=data_array.time.dt.year == year)
+        
+            if isinstance(t0, np.datetime64):
+                times.append(year_data.time.mean().values)
+            elif isinstance(t0, cftime.datetime):
+                times.append(year_data.time.mean().item())
+            else:
+                print(f"Unknown time type: {type(t0)}")
+            
+             # --- Compute days-per-month weights ---
+            days_in_month = year_data.time.dt.days_in_month
+            weights = days_in_month / days_in_month.sum()
+            # --- Compute weighted time mean ---
+            timmean = year_data.weighted(weights).mean('time')#.to_dataset(name=variable)
+            means.append(timmean)
+        result = xr.concat(means, dim='time')
+        result = result.assign_coords(time=("time", times))
+        # print(type(result.time.values[0]))
+        return result
+
+    elif isinstance(data_array, dict):
+
+        if 'snfr'in data_array.keys():
+            new_dict = {}
+
+            for p in ['tas','prsn','pr']:
+                new_dict[p] = yearly_mean(data_array[p], snfr_threshold_snow, snfr_threshold_pr)
+
+            new_dict['snfr'] = snow_fraction(new_dict['prsn'], new_dict['pr'], snfr_threshold_snow, snfr_threshold_pr)
+            return new_dict
+
+        else:
+            return {k: yearly_mean(v, snfr_threshold_snow, snfr_threshold_pr) for k, v in data_array.items()}
+
+    # --- lists (your variability output) ---
+    elif isinstance(data_array, list):
+        return [yearly_mean(v, snfr_threshold_snow, snfr_threshold_pr) for v in data_array]
+
+    else:
+        print('Data is not a dictionary, list, xarray or xr dataset. Nothing was changed.')
+        return data_array
+    
+
+'''
+Function to calculate the snow fraction from arrays of the snowfall and the total precipitation.
+Values for pr =< 0 are made nan as there is no snowfraction if there is no precipitation. 
+Values for prsn < 0 are made 0 as this indicated model error. 
+Where snowfall exceeds total precipitation they are made equal. 
+
+'''
+def snow_fraction(prsn, pr, snow_threshold = 0, pr_threshold = 0):
+    pr = pr.where(pr > pr_threshold)
+    prsn = prsn.where(pr > pr_threshold)
+
+    prsn = prsn.where(prsn > snow_threshold, 0)
+
+    difference = pr-prsn
+    prsn_overshoot = difference.where(difference < 0, 0)
+    print(prsn_overshoot.min().values)
+    prsn = prsn + prsn_overshoot # make it so snowfall cannot be larger than precipitation
+    
+    snow_fraction = prsn/pr
+
+    if (snow_fraction > 1.1).any():
+        print('snow_fraction larger than 1.1 found')
+        
+    return snow_fraction 
+
+
+
+'''
+Function to make a simple 2d plot (rectangular)
+'''
+
+def standard_2d_plot(array_2d, title = 'title', savename = 'quickplot.png', rotation = 0, max_scale = 'no_max', min_scale = 0, color = 'coolwarm'):
+    
+    # Create a figure and axis with a map projection
+    fig, ax = plt.subplots(figsize=(12, 6), subplot_kw={"projection": ccrs.PlateCarree()})
+
+    plot_kwargs = dict(
+        ax = ax,
+        transform = ccrs.PlateCarree(),
+        cmap=color,
+        cbar_kwargs={'label': title, 'orientation': 'horizontal', 'shrink': 0.6}
+    ) 
+
+    if max_scale != 'no_max':
+        plot_kwargs.update(vmin=min_scale, vmax=max_scale)
+
+    valid = array_2d.where(~np.isnan(array_2d), drop = True)
+
+    array_2d.plot(**plot_kwargs)
+
+
+    lon = valid.lon
+    lat = valid.lat
+
+    ax.set_extent([lon.min()-2, lon.max()+ 2, lat.min() - 2, lat.max() + 2], crs = ccrs.PlateCarree())
+    
+    if rotation == 1:
+        for cbar_ax in fig.axes:
+            for label in cbar_ax.get_xticklabels():
+                label.set_rotation(30)
+                
+    # Add coastlines and borders
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    
+    # Add gridlines
+    gl = ax.gridlines(draw_labels=True)
+    gl.top_labels = False
+    gl.right_labels = False
+    
+    plt.savefig('/nobackup/users/hartevel/data/Data_analysis/figures/' + savename)
+    
+    plt.show()
+
+
+'''
+Function to make a simple 2d plot (circular). It can also be used for subplots, then use ax and fig to specify. cbar_scale can be 'linear', 'log' or 'symlog'
+
+'''
+def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png',
+                           rotation=0, max_scale='no_max', min_scale=1e-5,
+                           color='coolwarm', cbar_scale="linear", ax = 'undefined', fig = 'undefined', 
+                           linthresh=1e-5, linscale=1.0, font = 14):
+
+    if ax == 'undefined':
+        # Create figure with POLAR projection
+        proj = ccrs.NorthPolarStereo(central_longitude=rotation)
+        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw={"projection": proj})
+
+    # Circular clipping
+    def set_circular_boundary(ax):
+        theta = np.linspace(0, 2*np.pi, 200)
+        center, radius = [0.5, 0.5], 0.5
+        verts = np.vstack([np.sin(theta), np.cos(theta)]).T * radius + center
+        ax.set_boundary(mpath.Path(verts), transform=ax.transAxes)
+
+    # Plot data
+    plot_kwargs = dict(
+        ax=ax,
+        transform=ccrs.PlateCarree(),
+        cmap=color,
+        add_colorbar=False
+    )
+
+    if max_scale == "no_max":
+        vmax = np.nanmax(np.abs(array_2d))
+    else:
+        vmax = max_scale
+
+    # --- COLORBAR SCALING OPTIONS ---
+    if cbar_scale == "log":
+        plot_kwargs["norm"] = LogNorm(vmin=min_scale, vmax=vmax)
+
+    elif cbar_scale == "symlog":
+        plot_kwargs["norm"] = SymLogNorm(
+            linthresh=linthresh,
+            linscale=linscale,
+            vmin=-vmax,
+            vmax=vmax,
+            base=10
+        )
+
+    elif cbar_scale == 'symlin': 
+        plot_kwargs["vmin"] = -vmax #if np.nanmin(array_2d) < 0 else min_scale
+        plot_kwargs["vmax"] = vmax
+
+    else:  # linear
+        plot_kwargs["vmin"] = min_scale
+        plot_kwargs["vmax"] = vmax
+
+    mesh0 = array_2d.plot(**plot_kwargs)
+
+    # Add features
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linestyle=":")
+    ax.set_extent([-180, 180, 60, 90], crs=ccrs.PlateCarree())
+    set_circular_boundary(ax)
+
+    # Colorbar
+    cbar0 = fig.colorbar(mesh0, ax=ax, fraction=0.035, pad=0.03)
+    cbar0.set_label(bar_label, fontsize = font)
+
+    # plt.savefig('/nobackup/users/hartevel/data/Data_analysis/figures/' + savename, bbox_inches="tight", dpi=300)
+
+    if ax == 'undefined':
+        plt.show()
+
+
+'''
+Funcition to select a specific area. Input can be a country name or Ocean or just specifying minimum and 
+maximum latitudes and longtitudes. Combinations are also possible, but it is necessary to ensure all lists 
+(for areas, min_lat, max_lat ect) are the same size and correctly aligned for the areas. So also if you don't 
+need limits for lat and lon, you still need to put them in if looking at more than one area. 
+
+'''
+def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon = 0, max_lon = 360):
+
+    if isinstance(areas, str):
+        areas = [areas]
+        min_lat = [min_lat]
+        max_lat = [max_lat]
+        min_lon = [min_lon]
+        max_lon = [max_lon]
+
+    if len(areas) != len(min_lat):
+        print('Make lists for lats and lons the same length')
+            
+
+    regions = regionmask.defined_regions.natural_earth_v5_1_2.countries_110
+    
+        # --- xarray objects ---
+    if isinstance(data, (xr.DataArray, xr.Dataset)):          
+
+        masks = []
+            
+        for i, area in enumerate(areas):
+            mask_slice = ((data.lat < max_lat[i]) & (data.lat > min_lat[i])) & ((data.lon < max_lon[i]) & (data.lon > min_lon[i]))
+
+            mask_all = regions.mask(data)
+            
+            if area in regions.names:
+                area_id = regions.names.index(area)
+                mask_area = (mask_all == area_id) & mask_slice
+                masks.append(mask_area)
+
+            elif area.endswith('Ocean'):
+                mask_ocean = mask_all.isnull() & mask_slice  
+                masks.append(mask_ocean)
+
+            else:
+                masks.append(mask_slice)
+
+        combined_mask = masks[0]
+        
+        for m in masks[1:]:
+            combined_mask |= m
+
+
+        if plot == 1: 
+            # Choose a representative slice ONLY if time exists
+            if 'time' in data.dims:
+                ref = data.isel(time=0)
+            else:
+                ref = data
+
+            standard_2d_plot_polar(ref.where(combined_mask), max_scale = 0.1)
+            standard_2d_plot(ref.where(combined_mask), max_scale = 0.1)
+
+
+        return data.where(combined_mask)
+    
+    # --- dictionaries ---
+    elif isinstance(data, dict):
+        return {k: select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon) for k, v in data.items()}
+
+    # --- lists (your variability output) ---
+    elif isinstance(data, list):
+        return [select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon) for v in data]
+
+    else:
+        print('Data is not a dictionary, list, xarray or xr dataset. Nothing was changed.')
+        return data

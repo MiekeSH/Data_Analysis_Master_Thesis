@@ -226,8 +226,8 @@ Function to make a simple 2d plot (circular). It can also be used for subplots, 
 '''
 def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png',
                            rotation=0, max_scale='no_max', min_scale=1e-5,
-                           color='coolwarm', cbar_scale="linear", ax = 'undefined', fig = 'undefined', 
-                           linthresh=1e-5, linscale=1.0, font = 14):
+                           color='coolwarm', cbar_scale="symlin", ax = 'undefined', fig = 'undefined', 
+                           linthresh=1e-5, linscale=1.0, font = 14, min_lat = 60):
 
     if ax == 'undefined':
         # Create figure with POLAR projection
@@ -280,12 +280,13 @@ def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png'
     # Add features
     ax.coastlines()
     ax.add_feature(cfeature.BORDERS, linestyle=":")
-    ax.set_extent([-180, 180, 60, 90], crs=ccrs.PlateCarree())
+    ax.set_extent([-180, 180, min_lat, 90], crs=ccrs.PlateCarree())
     set_circular_boundary(ax)
 
     # Colorbar
-    cbar0 = fig.colorbar(mesh0, ax=ax, fraction=0.035, pad=0.03)
-    cbar0.set_label(bar_label, fontsize = font)
+    if cbar_scale != None:
+        cbar0 = fig.colorbar(mesh0, ax=ax, fraction=0.035, pad=0.03)
+        cbar0.set_label(bar_label, fontsize = font)
 
     # plt.savefig('/nobackup/users/hartevel/data/Data_analysis/figures/' + savename, bbox_inches="tight", dpi=300)
 
@@ -300,7 +301,7 @@ maximum latitudes and longtitudes. Combinations are also possible, but it is nec
 need limits for lat and lon, you still need to put them in if looking at more than one area. 
 
 '''
-def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon = 0, max_lon = 360):
+def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon = -1, max_lon = 360, mask = True):
 
     if isinstance(areas, str):
         areas = [areas]
@@ -308,6 +309,7 @@ def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon
         max_lat = [max_lat]
         min_lon = [min_lon]
         max_lon = [max_lon]
+        mask = [mask]
 
     if len(areas) != len(min_lat):
         print('Make lists for lats and lons the same length')
@@ -321,17 +323,16 @@ def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon
         masks = []
             
         for i, area in enumerate(areas):
-            mask_slice = ((data.lat < max_lat[i]) & (data.lat > min_lat[i])) & ((data.lon < max_lon[i]) & (data.lon > min_lon[i]))
-
+            mask_slice = ((data.lat < max_lat[i]) & (data.lat > min_lat[i])) & ((data.lon < max_lon[i]) & (data.lon > min_lon[i])) & (mask[i])
             mask_all = regions.mask(data)
             
             if area in regions.names:
                 area_id = regions.names.index(area)
-                mask_area = (mask_all == area_id) & mask_slice
+                mask_area = (mask_all == area_id) & mask_slice & (mask[i])
                 masks.append(mask_area)
 
             elif area.endswith('Ocean'):
-                mask_ocean = mask_all.isnull() & mask_slice  
+                mask_ocean = mask_all.isnull() & mask_slice & (mask[i])
                 masks.append(mask_ocean)
 
             else:
@@ -350,19 +351,19 @@ def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon
             else:
                 ref = data
 
-            standard_2d_plot_polar(ref.where(combined_mask), max_scale = 0.1)
-            standard_2d_plot(ref.where(combined_mask), max_scale = 0.1)
+            standard_2d_plot_polar(ref.where(combined_mask))
+            # standard_2d_plot(ref.where(combined_mask), max_scale = 0.1)
 
 
         return data.where(combined_mask)
     
     # --- dictionaries ---
     elif isinstance(data, dict):
-        return {k: select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon) for k, v in data.items()}
+        return {k: select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon, mask) for k, v in data.items()}
 
     # --- lists (your variability output) ---
     elif isinstance(data, list):
-        return [select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon) for v in data]
+        return [select_area(v, areas, plot, min_lat, max_lat, min_lon, max_lon, mask) for v in data]
 
     else:
         print('Data is not a dictionary, list, xarray or xr dataset. Nothing was changed.')

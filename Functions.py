@@ -23,27 +23,43 @@ gives yearly data, if detrend = 'detrended' it gives the detrended arrays.
 '''
     
 
-def filepath(data_scenario, months, detrend = 'sliced_'):
+def filepath(data_scenario, months, detrend = 'sliced_', model = ''):
     if months == 1:
         timescale = ''
     elif months == 12:
         timescale = 'yearly_' 
     else:
         print('Give valid amount of months (1 fro monthly, 12 for yearly data)')
-
+    
     if detrend == 'raw':      # raw data   (For Data_preprocessing)
-        file_tas = [f for f in os.listdir(data_scenario) if f.startswith('tas_')][0]
-        file_prsn = [f for f in os.listdir(data_scenario) if f.startswith('prsn_')][0]
-        file_pr = [f for f in os.listdir(data_scenario) if f.startswith('pr_')][0]
-        return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, 
+        if model == 'CNRM':
+            file_tas = [f for f in os.listdir(data_scenario) if f.startswith('tas_')][0]
+            file_prsn = [f for f in os.listdir(data_scenario) if f.startswith('prsn_')][0]
+            file_pr = [f for f in os.listdir(data_scenario) if f.startswith('pr_')][0]
+            return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr 
+            
+        else:
+            file_tas = [f for f in os.listdir(data_scenario) if f.startswith('tas_')][0]
+            file_prsn = [f for f in os.listdir(data_scenario) if f.startswith('prsn_')][0]
+            file_pr = [f for f in os.listdir(data_scenario) if f.startswith('pr_')][0]
+            file_sic = [f for f in os.listdir(data_scenario) if f.startswith('remapped_SIC')][0]
+            return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, data_scenario + '/' + file_sic          
 
     else:
-        file_tas = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}tas')][0]
-        file_prsn = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}prsn')][0]
-        file_pr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}pr.')][0]
-        file_snfr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}snfr')][0]
-            
-    return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, data_scenario + '/' + file_snfr
+        if model == 'CNRM':
+            file_tas = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}tas')][0]
+            file_prsn = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}prsn')][0]
+            file_pr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}pr.')][0]
+            file_snfr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}snfr')][0]    
+            return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, data_scenario + '/' + file_snfr
+
+        else:
+            file_tas = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}tas')][0]
+            file_prsn = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}prsn')][0]
+            file_pr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}pr.')][0]
+            file_snfr = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}snfr')][0]    
+            file_sic = [f for f in os.listdir(data_scenario) if f.startswith(f'{timescale}{detrend}sic')][0]    
+            return data_scenario + '/' + file_tas, data_scenario + '/' + file_prsn, data_scenario + '/' + file_pr, data_scenario + '/' + file_snfr, data_scenario + '/' + file_sic
     
 
 '''
@@ -52,6 +68,7 @@ and model only needs specifying for CNRM in order to open the files.
 '''
 
 warnings.simplefilter("ignore", SerializationWarning) # suppresses the warning that datetime does not work
+
 
 def create_dictionary_data(directory, months, detrend = 'sliced_', model = ''):
 
@@ -68,22 +85,54 @@ def create_dictionary_data(directory, months, detrend = 'sliced_', model = ''):
             '4K': directory + '/gwl4p0_dmi'
         }
 
-    if detrend == 'raw':
-        variables = ['tas', 'prsn', 'pr']
-    else:
-        variables = ['tas', 'prsn', 'pr', 'snfr']
-
     data = {}
 
     for experiment, base_dir in base_dirs.items():
         data[experiment] = {}
-
-        for var, path in zip(variables, filepath(base_dir, months, detrend)):
+        if detrend == 'raw':
+            if model == 'CNRM':
+                variables = ['tas', 'prsn', 'pr']
+            else:
+                variables = ['tas', 'prsn', 'pr', 'siconc']
+        
+        else:
+            if model == 'CNRM': 
+                variables = ['tas', 'prsn', 'pr', 'snfr']
+            else:
+                variables = ['tas', 'prsn', 'pr', 'snfr', 'sic']
+        if (model == 'UKESM') & (experiment == '2K') & (detrend == 'raw'):
+            variables = ['tas', 'prsn', 'pr', 'siconca']
+                
+        for var, path in zip(variables, filepath(base_dir, months, detrend, model)):
             ds = xr.open_dataset(path)
             data[experiment][var] = ds[var]
 
     return data
 
+def create_xarray_data(directory, months, detrend='sliced_', model=''):
+
+    if model == 'CNRM':
+        base_dirs = {
+            'pi': directory + '/PI',
+            '2K': directory + '/GWL2',
+            '4K': directory + '/GWL4'
+        }
+    else:
+        base_dirs = {
+            'pi': directory + '/pi_control_smhi',
+            '2K': directory + '/gwl2p0_knmi',
+            '4K': directory + '/gwl4p0_dmi'
+        }
+
+    data = {}
+
+    for experiment, base_dir in base_dirs.items():
+
+        paths = filepath(base_dir, months, detrend, model)
+
+        data[experiment] = xr.open_mfdataset(paths, combine="by_coords", parallel=True)
+        
+    return data
 
 
 '''
@@ -91,46 +140,49 @@ Function for calculating the yearly mean from monthly means, can work with time 
 of type cftime or datetime64
 '''
 
+
+
 def yearly_mean(data_array, snfr_threshold_snow = 0, snfr_threshold_pr = 0):
 
     if isinstance(data_array, (xr.DataArray, xr.Dataset)):      
            
         t0 = data_array.time.values[0]
-        start_year = int(data_array.time.min().dt.year)
-        end_year = int(data_array.time.max().dt.year)
-        years = np.linspace(start_year, end_year, end_year - start_year + 1)
-        times = []
-        means = []
-        for year in years:
-            year_data = data_array.sel(time=data_array.time.dt.year == year)
         
-            if isinstance(t0, np.datetime64):
-                times.append(year_data.time.mean().values)
-            elif isinstance(t0, cftime.datetime):
-                times.append(year_data.time.mean().item())
-            else:
-                print(f"Unknown time type: {type(t0)}")
+        if isinstance(t0, cftime.Datetime360Day):
+            yearly_array = data_array.resample(time="YS").mean(dim='time')
+            print('360 calender, normal mean taken')
             
-             # --- Compute days-per-month weights ---
-            days_in_month = year_data.time.dt.days_in_month
-            weights = days_in_month / days_in_month.sum()
-            # --- Compute weighted time mean ---
-            timmean = year_data.weighted(weights).mean('time')#.to_dataset(name=variable)
-            means.append(timmean)
-        result = xr.concat(means, dim='time')
-        result = result.assign_coords(time=("time", times))
-        # print(type(result.time.values[0]))
-        return result
+            years = yearly_array.time.dt.year.values
+            yearly_array = yearly_array.assign_coords(time=years)
+
+            return yearly_array
+            
+        else: 
+            days = data_array.time.dt.days_in_month
+
+            weights = days.groupby("time.year") / days.groupby("time.year").sum()
+             
+            weighted_data = data_array * weights
+            
+            yearly = weighted_data.groupby("time.year").sum(dim="time")
+
+            yearly = yearly.rename({"year": "time"})
+
+            return yearly
 
     elif isinstance(data_array, dict):
 
         if 'snfr'in data_array.keys():
             new_dict = {}
 
-            for p in ['tas','prsn','pr']:
-                new_dict[p] = yearly_mean(data_array[p], snfr_threshold_snow, snfr_threshold_pr)
+            for k, v in data_array.items():
+                if k == 'snfr':
+                    continue
+                    
+                new_dict[k] = yearly_mean(v, snfr_threshold_snow, snfr_threshold_pr)
 
             new_dict['snfr'] = snow_fraction(new_dict['prsn'], new_dict['pr'], snfr_threshold_snow, snfr_threshold_pr)
+
             return new_dict
 
         else:
@@ -143,8 +195,8 @@ def yearly_mean(data_array, snfr_threshold_snow = 0, snfr_threshold_pr = 0):
     else:
         print('Data is not a dictionary, list, xarray or xr dataset. Nothing was changed.')
         return data_array
-    
 
+        
 '''
 Function to calculate the snow fraction from arrays of the snowfall and the total precipitation.
 Values for pr =< 0 are made nan as there is no snowfraction if there is no precipitation. 
@@ -160,13 +212,10 @@ def snow_fraction(prsn, pr, snow_threshold = 0, pr_threshold = 0):
 
     difference = pr-prsn
     prsn_overshoot = difference.where(difference < 0, 0)
-    print(prsn_overshoot.min().values)
+    # print(prsn_overshoot.min().values)
     prsn = prsn + prsn_overshoot # make it so snowfall cannot be larger than precipitation
     
     snow_fraction = prsn/pr
-
-    if (snow_fraction > 1.1).any():
-        print('snow_fraction larger than 1.1 found')
         
     return snow_fraction 
 
@@ -190,8 +239,12 @@ def standard_2d_plot(array_2d, title = 'title', savename = 'quickplot.png', rota
 
     if max_scale != 'no_max':
         plot_kwargs.update(vmin=min_scale, vmax=max_scale)
+        
+    # ensure non-lazy data
+    if hasattr(array_2d.data, "compute"):
+        array_2d = array_2d.compute()
 
-    valid = array_2d.where(~np.isnan(array_2d), drop = True)
+    valid = array_2d.where(~np.isnan(array_2d), drop=True)
 
     array_2d.plot(**plot_kwargs)
 
@@ -225,7 +278,7 @@ Function to make a simple 2d plot (circular). It can also be used for subplots, 
 
 '''
 def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png',
-                           rotation=0, max_scale='no_max', min_scale=1e-5,
+                           rotation=0, max_scale='no_max', min_scale='no_min',
                            color='coolwarm', cbar_scale="symlin", ax = 'undefined', fig = 'undefined', 
                            linthresh=1e-5, linscale=1.0, font = 14, min_lat = 60):
 
@@ -254,9 +307,17 @@ def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png'
     else:
         vmax = max_scale
 
+    if min_scale == "no_min":
+        if cbar_scale == 'log':
+            vmin = 1e-5
+        else:
+            vmin = np.nanmin(np.abs(array_2d))
+    else:
+        vmin = min_scale
+
     # --- COLORBAR SCALING OPTIONS ---
     if cbar_scale == "log":
-        plot_kwargs["norm"] = LogNorm(vmin=min_scale, vmax=vmax)
+        plot_kwargs["norm"] = LogNorm(vmin=vmin, vmax=vmax)
 
     elif cbar_scale == "symlog":
         plot_kwargs["norm"] = SymLogNorm(
@@ -272,7 +333,7 @@ def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png'
         plot_kwargs["vmax"] = vmax
 
     else:  # linear
-        plot_kwargs["vmin"] = min_scale
+        plot_kwargs["vmin"] = vmin
         plot_kwargs["vmax"] = vmax
 
     mesh0 = array_2d.plot(**plot_kwargs)
@@ -282,6 +343,7 @@ def standard_2d_plot_polar(array_2d, bar_label='title', savename='quickplot.png'
     ax.add_feature(cfeature.BORDERS, linestyle=":")
     ax.set_extent([-180, 180, min_lat, 90], crs=ccrs.PlateCarree())
     set_circular_boundary(ax)
+    ax.set_title('', fontsize = 0.1)
 
     # Colorbar
     if cbar_scale != None:
@@ -368,3 +430,96 @@ def select_area(data, areas = '', plot=0, min_lat = 0.5, max_lat = 90.5, min_lon
     else:
         print('Data is not a dictionary, list, xarray or xr dataset. Nothing was changed.')
         return data
+
+
+def plot_bar_graph(data, errors, groups, members, stack_labels, title = '', savename = 'not', y_label = 'Contribution'):
+
+    n_groups = len(groups)
+    n_members = len(members)
+    bar_width = 0.08
+    
+    group_x = np.arange(n_groups) * 0.55
+    member_offsets = np.arange(n_members) * bar_width * 1.6
+    x_positions = [
+        group_x[g] + member_offsets[m]
+        for g in range(n_groups)
+        for m in range(n_members)
+    ]
+    
+    # Colors (shared across all bars)
+    colors = plt.cm.tab10.colors[:len(stack_labels)]
+    
+    fig, ax = plt.subplots(figsize = (4.2,4))
+    
+    pos_idx = 0
+    for g in range(n_groups):
+        for m, member in enumerate(members):
+            pos_bottom = 0
+            neg_bottom = 0
+
+            values = np.array([data[member][g][s] for s in range(len(stack_labels))])
+            mask = values > 0
+            
+            # Get indices of positive stacks
+            pos_indices = np.where(mask)[0]
+            
+            for s, label in enumerate(stack_labels):
+                value = data[member][g][s]
+                yerror = errors[member][g]
+            
+                if value >= 0:
+                    is_top = (s == pos_indices[-1]) if len(pos_indices) > 0 else False
+            
+                    ax.bar(
+                        x_positions[pos_idx],
+                        value,
+                        bar_width,
+                        bottom=pos_bottom,
+                        color=colors[s],
+                        label=label if (g == 0 and m == 0) else "",
+                        yerr=yerror if is_top else None
+                    )
+            
+                    pos_bottom += value
+              
+                else:
+                    ax.bar(
+                        x_positions[pos_idx],
+                        value,
+                        bar_width,
+                        bottom=neg_bottom,
+                        color=colors[s],
+                        label=label if (g == 0 and m == 0) else ""
+                    )
+                    neg_bottom += value
+    
+            pos_idx += 1
+    
+    # Bottom x-ticks (members)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(members * n_groups, rotation=30, fontsize = 9)
+    
+    # Top x-ticks (groups)
+    ax_top = ax.twiny()
+    ax_top.set_xlim(ax.get_xlim())
+    ax_top.set_xticks(group_x + bar_width / 2)
+    ax_top.set_xticklabels(groups)
+    ax_top.xaxis.set_ticks_position('bottom')
+    ax_top.xaxis.set_label_position('bottom')
+    ax_top.spines['bottom'].set_position(('outward', 40))
+    
+    # Styling
+
+    if y_label == 'Contribution':
+        ax.axhline(0, linewidth=1, c = 'black', linestyle = '--')
+        ax.axhline(1, linewidth=1, c = 'black', linestyle = '--')
+        ax.set_ylabel('Contribution')
+    else:
+        ax.set_ylabel(y_label)
+        
+    ax.legend()
+    ax.set_title(title)
+    plt.tight_layout()
+    if savename != 'not':
+        plt.savefig(savename , bbox_inches = 'tight')
+    plt.show()
